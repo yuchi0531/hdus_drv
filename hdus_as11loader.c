@@ -498,7 +498,10 @@ static void print_usage(const char *argv0)
 	       "            or a raw 0x4000-byte binary (idx=0x4d66)\n"
 	       "  default   ./firmware/as11fw.bin, "
 	       "./firmware/SKNET_AS11Loader.sys,\n"
-	       "            ./as11fw.bin, ./SKNET_AS11Loader.sys\n",
+	       "            ./as11fw.bin, ./SKNET_AS11Loader.sys\n"
+	       "  source    hdus_as11loader --dry-run SKNET_AS11Loader.sys\n"
+	       "            (from a SKNET MonsterTV HDUS/HDU driver package;\n"
+	       "             see README, section ファームウェア)\n",
 	       argv0);
 }
 

@@ -103,6 +103,32 @@ lsusb | grep 3275             # 3275:6051 になっていれば成功
 
 転送は電源投入ごとに 1 回で、抜くまで `3275:6051` のままです。
 
+### 入手方法
+
+ファームウェアは SKNET の Windows ドライバパッケージに入っている
+`SKNET_AS11Loader.sys` から取り出します。
+
+1. SKNET のダウンロードページ（「アプリケーション・ドライバ」）から
+   MonsterTV HDUS / HDU 用のパッケージを入手する。
+   例: `MTVHDU_080701_Drv.zip`、`MTVHDP2_081020.zip`、`091110_Driver.zip`。
+   リンクが切れている場合は Wayback Machine の保存版を使う。
+2. zip を展開し、`SKNET_AS11Loader.sys` を取り出す。
+3. その `.sys` の `0xa88` に 2 バイトのヘッダ（`21 51` = CD 1.1、
+   `66 4d` = CD 1.0）があり、`0xa90` から `0x4000` バイトが本体。
+   古いパッケージ（MTVHDU 系、約 20 KB）がこの形。
+   2009 年以降の `091110` 系（約 57 KB）は PE ドライバで、この
+   ヘッダを含まない。
+4. そのまま `hdus_as11loader` に渡せる（抽出は不要）。
+   2 バイトヘッダ + `0x4000` バイトの `as11fw.bin` を作る場合は、
+   ヘッダ 2 バイトに本体を連結する。
+
+```sh
+./hdus_as11loader --dry-run path/to/SKNET_AS11Loader.sys
+# idx=0x5121, body 0x4000 bytes (4 blocks) と出れば使える
+```
+
+背景は recfriio の `README.HDUS`（as11loader の項）にも書かれています。
+
 ## インストールとロード
 
 ```sh
