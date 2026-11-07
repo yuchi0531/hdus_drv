@@ -1,0 +1,14 @@
+# hdus - SKNET MonsterTV HDUS
+# Character device /dev/hdusvideoX permissions and optional
+# automatic firmware upload on USB plug.
+
+# /dev/hdusvideo* : video group, world-readable/writable for
+# capture tools, plus uaccess ACL for the local console user.
+KERNEL=="hdusvideo*", GROUP="video", MODE="0666", TAG+="uaccess"
+
+# Optional: auto firmware upload when the un-programmed device
+# (VID:PID 1738:5211) is plugged in. The loader extracts the
+# firmware from SKNET_AS11Loader.sys and rewrites the device to
+# 3275:6051. Remove/comment out this line if you load firmware
+# manually.
+SUBSYSTEM=="usb", ACTION=="add", ATTRS{idVendor}=="1738", ATTRS{idProduct}=="5211", RUN+="/usr/local/bin/hdus_as11loader"

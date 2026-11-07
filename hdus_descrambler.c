@@ -1,0 +1,361 @@
+/*-
+ * Copyright (c) 2008 FUKAUMI Naoki.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Ported from recfriio recfriior5:
+ *  - xorTable from Hdus.cpp (getStream XOR for r5 == 0x91)
+ *  - DES-like blockDecrypt/packetDecrypt from decrypt.c by FUKAUMI Naoki
+ *    ("ASIE5606-like DES block cipher data decryption, ver 0.9.1"),
+ *    key4allZero / xorValue, blocks 0x10 at dst and 0x07 at dst+0x80.
+ *
+ * Kernel/userspace dual-use: only linux headers in kernel mode
+ * (__KERNEL__), libc headers otherwise. No malloc/free, no I/O.
+ */
+#include "hdus_descrambler.h"
+
+#ifdef __KERNEL__
+#include <linux/string.h>
+#include <linux/kernel.h>
+#else
+#include <string.h>
+#endif
+
+/* ------------------------------------------------------------------ */
+/* XOR table (Hdus.cpp): applied to bytes [4..187] when r5 == 0x91     */
+/* ------------------------------------------------------------------ */
+static u8 xorTable[] = {
+  0x6D, 0x4E, 0xF0, 0x1E, 0x59, 0x8B, 0xB2, 0xF0, 0x31, 0xF9, 0xD0, 0x85, 0xDD, 0x84, 0x4A, 0x6C,
+  0x15, 0x1C, 0x1C, 0x0A, 0x5B, 0x61, 0x6F, 0x1A, 0xAD, 0x60, 0x46, 0xF2, 0xD5, 0x03, 0x91, 0xC7,
+  0xB7, 0xDE, 0x68, 0x9A, 0x07, 0x47, 0x62, 0x5E, 0x39, 0xD6, 0x7E, 0x45, 0x10, 0x9D, 0x1A, 0xC4,
+  0x4C, 0x7F, 0xB7, 0x03, 0xCC, 0xAD, 0x72, 0x6C, 0xE9, 0x1B, 0x85, 0xA8, 0xEE, 0x4B, 0xA9, 0x3A,
+  0xFF, 0xF1, 0x3B, 0x16, 0xE0, 0x59, 0x4C, 0x3A, 0xD5, 0x4A, 0x14, 0x95, 0x0A, 0xD4, 0x25, 0x23,
+  0xF6, 0x2F, 0xE3, 0x57, 0x35, 0xCE, 0x52, 0x84, 0x11, 0xA3, 0xCB, 0x34, 0xA7, 0x15, 0x60, 0xE1,
+  0x98, 0x71, 0xF4, 0x1F, 0xF7, 0xBD, 0x22, 0x4B, 0x61, 0x8A, 0xD6, 0xAF, 0x24, 0x27, 0xC3, 0xA7,
+  0x07, 0x9B, 0xA5, 0x57, 0x83, 0x80, 0x58, 0x07, 0x1D, 0xDE, 0x0A, 0xD8, 0xB9, 0x0A, 0xBE, 0xAC,
+  0xA9, 0x76, 0x00, 0x1C, 0x23, 0x9F, 0x82, 0x79, 0x41, 0x56, 0xC8, 0x83, 0xC3, 0x38, 0x37, 0x4B,
+  0x5A, 0xED, 0xC9, 0xD5, 0xF2, 0x87, 0x02, 0xC3, 0x79, 0xA0, 0x61, 0xD9, 0x63, 0x50, 0xCA, 0x72,
+  0xC2, 0x51, 0x40, 0x98, 0xD9, 0x8B, 0xED, 0xA9, 0xA1, 0x4C, 0xA5, 0xE7, 0xAF, 0xF2, 0x08, 0x4D,
+  0x82, 0xF8, 0xD5, 0x02, 0x61, 0xD8, 0xC2, 0xE1
+};
+
+/* ------------------------------------------------------------------ */
+/* DES-like decrypt (decrypt.c, ported verbatim apart from uchar/uint  */
+/* -> u8/u32 and removal of `inline`, which breaks in-kernel C).      */
+/* ------------------------------------------------------------------ */
+static const u32 table[][64] = {
+  {
+    0x01010400, 0x00000000, 0x00010000, 0x01010404, 0x01010004, 0x00010404, 0x00000004, 0x00010000,
+    0x00000400, 0x01010400, 0x01010404, 0x00000400, 0x01000404, 0x01010004, 0x01000000, 0x00000004,
+    0x00000404, 0x01000400, 0x01000400, 0x00010400, 0x00010400, 0x01010000, 0x01010000, 0x01000404,
+    0x00010004, 0x01000004, 0x01000004, 0x00010004, 0x00000000, 0x00000404, 0x00010404, 0x01000000,
+    0x00010000, 0x01010404, 0x00000004, 0x01010000, 0x01010400, 0x01000000, 0x01000000, 0x00000400,
+    0x01010004, 0x00010000, 0x00010400, 0x01000004, 0x00000400, 0x00000004, 0x01000404, 0x00010404,
+    0x01010404, 0x00010004, 0x01010000, 0x01000404, 0x01000004, 0x00000404, 0x00010404, 0x01010400,
+    0x00000404, 0x01000400, 0x01000400, 0x00000000, 0x00010004, 0x00010400, 0x00000000, 0x01010004
+  },
+  {
+    0x80108020, 0x80008000, 0x00008000, 0x00108020, 0x00100000, 0x00000020, 0x80100020, 0x80008020,
+    0x80000020, 0x80108020, 0x80108000, 0x80000000, 0x80008000, 0x00100000, 0x00000020, 0x80100020,
+    0x00108000, 0x00100020, 0x80008020, 0x00000000, 0x80000000, 0x00008000, 0x00108020, 0x80100000,
+    0x00100020, 0x80000020, 0x00000000, 0x00108000, 0x00008020, 0x80108000, 0x80100000, 0x00008020,
+    0x00000000, 0x00108020, 0x80100020, 0x00100000, 0x80008020, 0x80100000, 0x80108000, 0x00008000,
+    0x80100000, 0x80008000, 0x00000020, 0x80108020, 0x00108020, 0x00000020, 0x00008000, 0x80000000,
+    0x00008020, 0x80108000, 0x00100000, 0x80000020, 0x00100020, 0x80008020, 0x80000020, 0x00100020,
+    0x00108000, 0x00000000, 0x80008000, 0x00008020, 0x80000000, 0x80100020, 0x80108020, 0x00108000
+  },
+  {
+    0x00000208, 0x08020200, 0x00000000, 0x08020008, 0x08000200, 0x00000000, 0x00020208, 0x08000200,
+    0x00020008, 0x08000008, 0x08000008, 0x00020000, 0x08020208, 0x00020008, 0x08020000, 0x00000208,
+    0x08000000, 0x00000008, 0x08020200, 0x00000200, 0x00020200, 0x08020000, 0x08020008, 0x00020208,
+    0x08000208, 0x00020200, 0x00020000, 0x08000208, 0x00000008, 0x08020208, 0x00000200, 0x08000000,
+    0x08020200, 0x08000000, 0x00020008, 0x00000208, 0x00020000, 0x08020200, 0x08000200, 0x00000000,
+    0x00000200, 0x00020008, 0x08020208, 0x08000200, 0x08000008, 0x00000200, 0x00000000, 0x08020008,
+    0x08000208, 0x00020000, 0x08000000, 0x08020208, 0x00000008, 0x00020208, 0x00020200, 0x08000008,
+    0x08020000, 0x08000208, 0x00000208, 0x08020000, 0x00020208, 0x00000008, 0x08020008, 0x00020200
+  },
+  {
+    0x00802001, 0x00002081, 0x00002081, 0x00000080, 0x00802080, 0x00800081, 0x00800001, 0x00002001,
+    0x00000000, 0x00802000, 0x00802000, 0x00802081, 0x00000081, 0x00000000, 0x00800080, 0x00800001,
+    0x00000001, 0x00002000, 0x00800000, 0x00802001, 0x00000080, 0x00800000, 0x00002001, 0x00002080,
+    0x00800081, 0x00000001, 0x00002080, 0x00800080, 0x00002000, 0x00802080, 0x00802081, 0x00000081,
+    0x00800080, 0x00800001, 0x00802000, 0x00802081, 0x00000081, 0x00000000, 0x00000000, 0x00802000,
+    0x00002080, 0x00800080, 0x00800081, 0x00000001, 0x00802001, 0x00002081, 0x00002081, 0x00000080,
+    0x00802081, 0x00000081, 0x00000001, 0x00002000, 0x00800001, 0x00002001, 0x00802080, 0x00800081,
+    0x00002001, 0x00002080, 0x00800000, 0x00802001, 0x00000080, 0x00800000, 0x00002000, 0x00802080
+  },
+  {
+    0x00000100, 0x02080100, 0x02080000, 0x42000100, 0x00080000, 0x00000100, 0x40000000, 0x02080000,
+    0x40080100, 0x00080000, 0x02000100, 0x40080100, 0x42000100, 0x42080000, 0x00080100, 0x40000000,
+    0x02000000, 0x40080000, 0x40080000, 0x00000000, 0x40000100, 0x42080100, 0x42080100, 0x02000100,
+    0x42080000, 0x40000100, 0x00000000, 0x42000000, 0x02080100, 0x02000000, 0x42000000, 0x00080100,
+    0x00080000, 0x42000100, 0x00000100, 0x02000000, 0x40000000, 0x02080000, 0x42000100, 0x40080100,
+    0x02000100, 0x40000000, 0x42080000, 0x02080100, 0x40080100, 0x00000100, 0x02000000, 0x42080000,
+    0x42080100, 0x00080100, 0x42000000, 0x42080100, 0x02080000, 0x00000000, 0x40080000, 0x42000000,
+    0x00080100, 0x02000100, 0x40000100, 0x00080000, 0x00000000, 0x40080000, 0x02080100, 0x40000100
+  },
+  {
+    0x20000010, 0x20400000, 0x00004000, 0x20404010, 0x20400000, 0x00000010, 0x20404010, 0x00400000,
+    0x20004000, 0x00404010, 0x00400000, 0x20000010, 0x00400010, 0x20004000, 0x20000000, 0x00004010,
+    0x00000000, 0x00400010, 0x20004010, 0x00004000, 0x00404000, 0x20004010, 0x00000010, 0x20400010,
+    0x20400010, 0x00000000, 0x00404010, 0x20404000, 0x00004010, 0x00404000, 0x20404000, 0x20000000,
+    0x20004000, 0x00000010, 0x20400010, 0x00404000, 0x20404010, 0x00400000, 0x00004010, 0x20000010,
+    0x00400000, 0x20004000, 0x20000000, 0x00004010, 0x20000010, 0x20404010, 0x00404000, 0x20400000,
+    0x00404010, 0x20404000, 0x00000000, 0x20400010, 0x00000010, 0x00004000, 0x20400000, 0x00404010,
+    0x00004000, 0x00400010, 0x20004010, 0x00000000, 0x20404000, 0x20000000, 0x00400010, 0x20004010
+  },
+  {
+    0x00200000, 0x04200002, 0x04000802, 0x00000000, 0x00000800, 0x04000802, 0x00200802, 0x04200800,
+    0x04200802, 0x00200000, 0x00000000, 0x04000002, 0x00000002, 0x04000000, 0x04200002, 0x00000802,
+    0x04000800, 0x00200802, 0x00200002, 0x04000800, 0x04000002, 0x04200000, 0x04200800, 0x00200002,
+    0x04200000, 0x00000800, 0x00000802, 0x04200802, 0x00200800, 0x00000002, 0x04000000, 0x00200800,
+    0x04000000, 0x00200800, 0x00200000, 0x04000802, 0x04000802, 0x04200002, 0x04200002, 0x00000002,
+    0x00200002, 0x04000000, 0x04000800, 0x00200000, 0x04200800, 0x00000802, 0x00200802, 0x04200800,
+    0x00000802, 0x04000002, 0x04200802, 0x04200000, 0x00200800, 0x00000000, 0x00000002, 0x04200802,
+    0x00000000, 0x00200802, 0x04200000, 0x00000800, 0x04000002, 0x04000800, 0x00000800, 0x00200002
+  },
+  {
+    0x10001040, 0x00001000, 0x00040000, 0x10041040, 0x10000000, 0x10001040, 0x00000040, 0x10000000,
+    0x00040040, 0x10040000, 0x10041040, 0x00041000, 0x10041000, 0x00041040, 0x00001000, 0x00000040,
+    0x10040000, 0x10000040, 0x10001000, 0x00001040, 0x00041000, 0x00040040, 0x10040040, 0x10041000,
+    0x00001040, 0x00000000, 0x00000000, 0x10040040, 0x10000040, 0x10001000, 0x00041040, 0x00040000,
+    0x00041040, 0x00040000, 0x10041000, 0x00001000, 0x00000040, 0x10040040, 0x00001000, 0x00041040,
+    0x10001000, 0x00000040, 0x10000040, 0x10040000, 0x10040040, 0x10000000, 0x00040000, 0x10001040,
+    0x00000000, 0x10041040, 0x00040040, 0x10000040, 0x10040000, 0x10001000, 0x10001040, 0x00000000,
+    0x10041040, 0x00041000, 0x00041000, 0x00001040, 0x00001040, 0x00040040, 0x10000000, 0x10041000
+  }
+};
+
+static u32 ror(u32 a, u32 b) { return (a >> b) | (a << (32 - b)); }
+static u32 rol(u32 a, u32 b) { return (a << b) | (a >> (32 - b)); }
+
+static void stageX(u32 *a, u32 *b, u32 sv, u32 mask)
+{
+	u32 tmp = ((*a >> sv) ^ *b) & mask; *a ^= tmp << sv; *b ^= tmp;
+}
+
+static void stage0(u32 *l, u32 *r) { stageX(l, r,  4, 0x0f0f0f0f); }
+static void stage1(u32 *l, u32 *r) { stageX(l, r, 16, 0x0000ffff); }
+static void stage2(u32 *l, u32 *r) { stageX(r, l,  2, 0x33333333); }
+static void stage3(u32 *l, u32 *r) { stageX(r, l,  8, 0x00ff00ff); }
+
+static void stage4(u32 *l, u32 *r)
+{
+	u32 tmp = (*l ^ *r) & 0xaaaaaaaa; *l ^= tmp; *r ^= tmp;
+}
+
+static u32 _big2(const u8 *cp)
+{
+	return ((u32)cp[0] << 24) | ((u32)cp[1] << 16) | ((u32)cp[2] << 8) | (u32)cp[3];
+}
+
+static void _2big(u8 *cp, u32 v)
+{
+	cp[0] = (u8)(v >> 24);
+	cp[1] = (u8)(v >> 16);
+	cp[2] = (u8)(v >> 8);
+	cp[3] = (u8)v;
+}
+
+static void
+blockDecrypt(u32 *key, const u8 *src, u8 *dst, int nBlock)
+{
+	while (nBlock-- > 0) {
+		u32 v0 = _big2(src);
+		u32 v1 = _big2(src + 4);
+
+		stage0(&v0, &v1);
+		stage1(&v0, &v1);
+		stage2(&v0, &v1);
+		stage3(&v0, &v1);
+		v1 = rol(v1, 1);
+		stage4(&v0, &v1);
+		v0 = rol(v0, 1);
+		{
+			u32 *kp = key;
+			int round = 8;
+			do { /* key 4 * 8 * 4 = 128byte */
+				u32 ind;
+				ind = v1 ^ *kp++;
+				v0 ^= table[5][(ind >>  8) & 0x3f] ^ table[3][(ind >> 16) & 0x3f] ^
+				      table[1][(ind >> 24) & 0x3f] ^ table[7][ind & 0x3f];
+				ind = ror(v1, 4) ^ *kp++;
+				v0 ^= table[4][(ind >>  8) & 0x3f] ^ table[2][(ind >> 16) & 0x3f] ^
+				      table[0][(ind >> 24) & 0x3f] ^ table[6][ind & 0x3f];
+				ind = v0 ^ *kp++;
+				v1 ^= table[5][(ind >>  8) & 0x3f] ^ table[3][(ind >> 16) & 0x3f] ^
+				      table[1][(ind >> 24) & 0x3f] ^ table[7][ind & 0x3f];
+				ind = ror(v0, 4) ^ *kp++;
+				v1 ^= table[4][(ind >>  8) & 0x3f] ^ table[2][(ind >> 16) & 0x3f] ^
+				      table[0][(ind >> 24) & 0x3f] ^ table[6][ind & 0x3f];
+			} while (--round > 0);
+		}
+		v1 = ror(v1, 1);
+		stage4(&v1, &v0);
+		v0 = ror(v0, 1);
+		stage3(&v1, &v0);
+		stage2(&v1, &v0);
+		stage1(&v1, &v0);
+		stage0(&v1, &v0);
+
+		_2big(dst, v1);
+		_2big(dst + 4, v0);
+		src += 8;
+		dst += 8;
+	}
+}
+
+/* ASIE5606 register 10-1F setting: all zero */
+static u32 key4allZero[][32] = {
+  {
+    0x02121903, 0x3D131236, 0x0C0C270A, 0x20393131,
+    0x032C082B, 0x3E011F00, 0x212A0702, 0x063A1C1F,
+    0x3A042A0C, 0x270A2B0C, 0x303D2203, 0x31223415,
+    0x10313C01, 0x07140D0A, 0x261D0617, 0x0C06260F,
+    0x33183332, 0x011D0402, 0x0719151D, 0x27280C2C,
+    0x20302238, 0x2A2F362A, 0x352A1125, 0x29003038,
+    0x083F0D38, 0x0B092406, 0x2916350C, 0x3204122D,
+    0x2C242439, 0x1D183310, 0x07360B38, 0x102C0B0D
+  },
+  {
+    0x04290000, 0x0E151B28, 0x30151501, 0x11080025,
+    0x00192038, 0x29140302, 0x06320107, 0x0E041030,
+    0x2C020828, 0x08230802, 0x19061304, 0x19011005,
+    0x091B2018, 0x10180100, 0x0A001003, 0x361C1424,
+    0x09272602, 0x01002001, 0x081C1001, 0x140C0B00,
+    0x04040612, 0x36120412, 0x32200804, 0x0C130A28,
+    0x13030220, 0x05222411, 0x18151900, 0x002E0108,
+    0x1409041A, 0x30042401, 0x39102830, 0x03220000
+  }
+};
+
+static u8 xorValue[] = { 0x00, 0x00, 0xB1, 0xF2, 0x00, 0x04, 0xF2, 0x04 };
+
+static void
+packetDecrypt(const u8 *src, u8 *dst, int nPacket)
+{
+	while (nPacket-- > 0) {
+		int i;
+		for (i = 0; i < 4; i++)
+			*dst++ = *src++;
+		for (i = 0; i < 0xB8; i++)
+			dst[i] = (u8)(src[i] ^ xorValue[i & 0x07]);
+		blockDecrypt(key4allZero[0], dst,      dst,      0x10);
+		blockDecrypt(key4allZero[1], dst + 0x80, dst + 0x80, 0x07);
+		src += 0xB8;
+		dst += 0xB8;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Public API                                                          */
+/* ------------------------------------------------------------------ */
+
+void hdus_descrambler_packet(u8 r5, u8 *pkt188)
+{
+	if (!pkt188)
+		return;
+	if (r5 == 0x91) {
+		int i;
+		for (i = 4; i < 188; i++)
+			pkt188[i] ^= xorTable[i - 4];
+	} else {
+		/* Mirror Hdus.cpp: copy to tmp, then packetDecrypt(tmp, buf, 1). */
+		u8 tmp[188];
+		memcpy(tmp, pkt188, 188);
+		packetDecrypt(tmp, pkt188, 1);
+	}
+}
+
+void hdus_descrambler_init(struct hdus_descrambler *d, u8 r5)
+{
+	if (!d)
+		return;
+	d->r5 = r5;
+	d->leftover_len = 0;
+	d->packets = 0;
+	d->dropped = 0;
+	/* leftover[] contents are dead while leftover_len == 0. */
+}
+
+/* Emit the full 188-byte packet in d->leftover to out; caller checked room. */
+static size_t emit_packet(struct hdus_descrambler *d, u8 *out)
+{
+	hdus_descrambler_packet(d->r5, d->leftover);
+	memcpy(out, d->leftover, 188);
+	d->leftover_len = 0;
+	d->packets++;
+	return 188;
+}
+
+size_t hdus_descrambler_feed(struct hdus_descrambler *d, const u8 *in,
+			     size_t len, u8 *out, size_t out_cap)
+{
+	size_t written = 0;
+	size_t pos = 0;
+
+	if (!d || (!in && len > 0) || (!out && out_cap > 0))
+		return 0;
+
+	while (pos < len || d->leftover_len == HDUS_TS_PACKET_SIZE) {
+		/* Full packet buffered but not yet emitted (small out_cap). */
+		if (d->leftover_len == HDUS_TS_PACKET_SIZE) {
+			if (written + HDUS_TS_PACKET_SIZE > out_cap)
+				break; /* keep for next call */
+			written += emit_packet(d, out + written);
+			continue;
+		}
+
+		if (pos >= len)
+			break;
+
+		if (d->leftover_len == 0) {
+			/* Resync: scan for 0x47, drop garbage before it. */
+			size_t sync = pos;
+			while (sync < len && in[sync] != HDUS_TS_SYNC_BYTE)
+				sync++;
+			if (sync == len) {
+				d->dropped += (u64)(len - pos);
+				pos = len;
+				break;
+			}
+			d->dropped += (u64)(sync - pos);
+			pos = sync;
+		}
+
+		/*
+		 * Fill leftover from current position. If we are mid-packet
+		 * (leftover_len > 0) this is payload: a 0x47 inside it is
+		 * data, not a new sync (sequential scan semantics).
+		 */
+		{
+			size_t want = HDUS_TS_PACKET_SIZE - d->leftover_len;
+			size_t avail = len - pos;
+			size_t take = avail < want ? avail : want;
+			memcpy(d->leftover + d->leftover_len, in + pos, take);
+			d->leftover_len += take;
+			pos += take;
+		}
+		/* Loop: emits if full, otherwise pos == len and we exit. */
+	}
+	return written;
+}

@@ -1,0 +1,216 @@
+--- a/arib_std_b25.c
++++ b/arib_std_b25.c
+@@ -8,6 +8,99 @@
+ #include "ts_common_types.h"
+ #include "ts_section_parser.h"
+ 
++/* HDUS PATCH begin : ECM result cache
++ *
++ * Why: on HDUS the tuner and the B-CAS card share registers and the kernel
++ * driver has to power-cycle between tuner and card mode (~1.6 s per card
++ * access, see hdus_drv README "同時使用 (mux)").  ECM sections repeat every
++ * 100-500 ms with identical content, so most proc_ecm() round-trips are pure
++ * waste and they stall the TS.  Cache the last successfully processed ECM per
++ * decryptor and reuse the multi2 key already installed in dec->m2.
++ *
++ *   ARIB25_ECM_CACHE=0        compile time switch, default 1 (cache on)
++ *   ARIB25_ECM_CACHE_MS=<n>   runtime TTL in ms, default 2000, 0 = disabled
++ *   ARIB25_ECM_CACHE_DEBUG=1  log every cache hit/miss to stderr
++ */
++#ifndef ARIB25_ECM_CACHE
++#define ARIB25_ECM_CACHE 1
++#endif
++
++#define HDUS_ECM_CACHE_TTL_MS_DEFAULT 2000
++
++#if ARIB25_ECM_CACHE
++#include <time.h>
++
++/* FNV-1a 32 bit.  Deliberately non-static: the offline test harness
++   (test/ecm_cache_test.c) calls this helper directly. */
++uint32_t hdus_ecm_hash(const uint8_t *p, int32_t len)
++{
++	uint32_t h;
++	int32_t i;
++
++	h = 2166136261u;
++	for(i = 0; i < len; i++){
++		h ^= (uint32_t)p[i];
++		h *= 16777619u;
++	}
++	return h;
++}
++
++/* TTL in ms from ARIB25_ECM_CACHE_MS; 0 disables the cache.  Read once. */
++int32_t hdus_ecm_cache_ttl_ms(void)
++{
++	static int32_t cached = -1;
++
++	const char *s;
++	char *end;
++	long v;
++
++	if(cached >= 0){
++		return cached;
++	}
++	cached = HDUS_ECM_CACHE_TTL_MS_DEFAULT;
++
++	s = getenv("ARIB25_ECM_CACHE_MS");
++	if( (s != NULL) && (*s != '\0') ){
++		end = NULL;
++		v = strtol(s, &end, 10);
++		if( (end != NULL) && (end != s) && (v >= 0) && (v <= 3600000) ){
++			cached = (int32_t)v;
++		}
++	}
++	return cached;
++}
++
++/* ARIB25_ECM_CACHE_DEBUG: any non empty value other than "0" enables logging. */
++int hdus_ecm_cache_debug_on(void)
++{
++	static int cached = -1;
++
++	const char *s;
++
++	if(cached >= 0){
++		return cached;
++	}
++	cached = 0;
++
++	s = getenv("ARIB25_ECM_CACHE_DEBUG");
++	if( (s != NULL) && (*s != '\0') && (*s != '0') ){
++		cached = 1;
++	}
++	return cached;
++}
++
++static int64_t hdus_now_ms(void)
++{
++	struct timespec ts;
++
++	if(clock_gettime(CLOCK_MONOTONIC, &ts) != 0){
++		return 0;
++	}
++	return ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
++}
++#endif /* ARIB25_ECM_CACHE */
++/* HDUS PATCH end : ECM result cache */
++
+ /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  inner structures
+  ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+@@ -64,6 +157,17 @@
+ 	int32_t            unpurchased;
+ 	int32_t            last_error;
+ 
++/* HDUS PATCH begin : ECM result cache state (zeroed by calloc) */
++#if ARIB25_ECM_CACHE
++	int32_t            ecm_cache_valid;
++	int32_t            ecm_cache_pid;
++	uint32_t           ecm_cache_hash;
++	int64_t            ecm_cache_stamp;   /* ms, CLOCK_MONOTONIC */
++	uint64_t           ecm_cache_hit;
++	uint64_t           ecm_cache_miss;
++#endif
++/* HDUS PATCH end */
++
+ 	void              *prev;
+ 	void              *next;
+ 
+@@ -1693,6 +1797,13 @@
+ 
+ 	TS_SECTION sect;
+ 
++/* HDUS PATCH begin : ECM result cache locals */
++#if ARIB25_ECM_CACHE
++	uint32_t ecm_hash;
++	int32_t  ecm_ttl;
++#endif
++/* HDUS PATCH end */
++
+ 	r = 0;
+ 	memset(&sect, 0, sizeof(sect));
+ 
+@@ -1722,11 +1833,56 @@
+ 	length = (sect.tail - sect.data) - 4;
+ 	p = sect.data;
+ 
++/* HDUS PATCH begin : ECM result cache lookup */
++#if ARIB25_ECM_CACHE
++	/* hash the whole ECM section body (superset of the bytes handed to the
++	   card, p/length) together with the ECM pid */
++	ecm_hash = hdus_ecm_hash(sect.data, (int32_t)(sect.tail - sect.data));
++	ecm_ttl  = hdus_ecm_cache_ttl_ms();
++
++	if( (ecm_ttl > 0) &&
++	    (dec->ecm_cache_valid != 0) &&
++	    (dec->ecm_cache_pid == dec->ecm_pid) &&
++	    (dec->ecm_cache_hash == ecm_hash) &&
++	    (dec->m2 != NULL) &&
++	    ((hdus_now_ms() - dec->ecm_cache_stamp) < (int64_t)ecm_ttl) ){
++		dec->ecm_cache_hit += 1;
++		if(hdus_ecm_cache_debug_on()){
++			fprintf(stderr,
++			        "[arib25] ECM cache HIT  pid=0x%04x hash=%08x age=%lldms "
++			        "hit=%llu miss=%llu card_call=skipped\n",
++			        (unsigned)dec->ecm_pid, (unsigned)ecm_hash,
++			        (long long)(hdus_now_ms() - dec->ecm_cache_stamp),
++			        (unsigned long long)dec->ecm_cache_hit,
++			        (unsigned long long)dec->ecm_cache_miss);
++		}
++		/* identical ECM == identical scramble key: dec->m2 still holds it */
++		r = 0;
++		goto LAST;
++	}
++
++	dec->ecm_cache_miss += 1;
++	if(hdus_ecm_cache_debug_on()){
++		fprintf(stderr,
++		        "[arib25] ECM cache MISS pid=0x%04x hash=%08x ttl=%dms "
++		        "hit=%llu miss=%llu card_call=issued\n",
++		        (unsigned)dec->ecm_pid, (unsigned)ecm_hash, (int)ecm_ttl,
++		        (unsigned long long)dec->ecm_cache_hit,
++		        (unsigned long long)dec->ecm_cache_miss);
++	}
++#endif /* ARIB25_ECM_CACHE */
++/* HDUS PATCH end */
++
+ 	r = bcas->proc_ecm(bcas, &res, p, length);
+ 	if(r < 0){
+ 		if(dec->m2 != NULL){
+ 			dec->m2->clear_scramble_key(dec->m2);
+ 		}
++/* HDUS PATCH begin : the multi2 key is gone, the cached result is not reusable */
++#if ARIB25_ECM_CACHE
++		dec->ecm_cache_valid = 0;
++#endif
++/* HDUS PATCH end */
+ 		r = ARIB_STD_B25_ERROR_ECM_PROC_FAILURE;
+ 		goto LAST;
+ 	}
+@@ -1762,6 +1918,15 @@
+ 
+ 	dec->m2->set_scramble_key(dec->m2, res.scramble_key);
+ 
++/* HDUS PATCH begin : ECM result cache update (successful card call only) */
++#if ARIB25_ECM_CACHE
++	dec->ecm_cache_valid = 1;
++	dec->ecm_cache_pid   = dec->ecm_pid;
++	dec->ecm_cache_hash  = ecm_hash;
++	dec->ecm_cache_stamp = hdus_now_ms();
++#endif
++/* HDUS PATCH end */
++
+ 	if (0) {
+ 		int i;
+ 		fprintf(stdout, "----\n");
+--- a/ts_section_parser_error_code.h
++++ b/ts_section_parser_error_code.h
+@@ -1,5 +1,5 @@
+ #ifndef TS_SECTION_PARSER_ERROR_CODE_H
+-#define TS_SECTION_PARESR_ERROR_CODE_H
++#define TS_SECTION_PARSER_ERROR_CODE_H   /* HDUS: upstream typo, guard did not match #ifndef */
+ 
+ #define TS_SECTION_PARSER_ERROR_INVALID_PARAM        -1
+ #define TS_SECTION_PARSER_ERROR_NO_ENOUGH_MEMORY     -2

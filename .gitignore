@@ -1,0 +1,34 @@
+
+# deepwork
+.slim/deepwork/
+
+# build artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/
+hdus_as11loader
+tools/hdus_test
+tools/hdus_b25
+tools/bcas_check
+tools/descrambler_test
+out.ts
+tools/ifd-hdus/*.o
+tools/ifd-hdus/*.so
+tools/ifd-hdus/hdus_card_test
+tools/hdus_b25_ecm
+tools/hdus_card_probe
+tools/asie_table_probe
+tools/asie_order_probe
+third_party/arib25_patched/test/build/
+.slim/
+firmware/*.bin
+firmware/*.sys
+firmware/as11fw.bin
+*.png
+*.ts

@@ -1,0 +1,23 @@
+# reader.conf snippet for the HDUS B-CAS IFD handler (libhdus_ifd.so).
+# Merge into /etc/reader.conf (pcsc-lite), then restart pcscd:
+#   sudo systemctl restart pcscd
+#
+# This is a custom IFD handler, not a USB CCID reader, so there are no
+# Vendor/Product IDs to register: the handler is configured purely via
+# this [IFDHandler]-style KEY/value section in reader.conf (FRIENDLYNAME /
+# DEVICENAME / LIBPATH / CHANNELID), which pcscd passes to
+# IFDHCreateChannelByName() as DEVICENAME.
+#
+# FRIENDLYNAME is the reader name shown by SCardListReaders/pcsc_scan and
+# must match HDUS_IFD_READER_NAME ("HDUS B-CAS") in hdus_ifd.c.
+#
+# DEVICENAME: the usbfs device node of the HDUS tuner. It is passed
+# verbatim to hdus_card_open() when it starts with '/'; override at
+# runtime with the HDUS_USB_PATH environment variable instead if the
+# bus/device number changes (USB nodes move across reboots!). The HDUS
+# device node is root-only by default — see the udev note in README.md.
+
+FRIENDLYNAME  "HDUS B-CAS"
+DEVICENAME    /dev/hdusvideo0
+LIBPATH       /usr/lib/pcsc/drivers/libhdus_ifd.so
+CHANNELID     1
