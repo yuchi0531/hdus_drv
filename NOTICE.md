@@ -23,14 +23,6 @@ behaviour (register addresses, T=1 framing, timings) is used.
 `hdus_test.c`'s channel numbering follows `recpt1`/`BonDriver_LinuxPT`
 (`freq_no`), so existing channel tables keep working.
 
-## Firmware
-
-The SKNET firmware (`SKNET_AS11Loader.sys` / `as11fw.bin`) is **not**
-included in this repository: it is SKNET's property. `hdus_as11loader`
-extracts it from a `SKNET_AS11Loader.sys` that you supply (see
-`firmware/README.md`).
-
 ## No warranty
 
-Provided AS-IS. Recording and descrambling rules differ by country;
-you are responsible for how you use this.
+Provided AS-IS, without warranty of any kind.

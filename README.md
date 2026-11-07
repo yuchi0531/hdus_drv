@@ -90,34 +90,18 @@ sudo dkms install hdus/0.1.0
 ## ファームウェア
 
 HDUS は電源投入直後は未書込デバイス（`1738:5211`）として現れます。
-SKNET 純正ドライバ（`SKNET_AS11Loader.sys`）から抽出したファームウェアを
-`hdus_as11loader` で転送すると、デバイスは `3275:6051` として再列挙され、
-`hdus` モジュールが使える状態になります。
-
-有効なファームウェア（検証済み、`--dry-run` で確認）:
-
-- `~/projects/hdus-linux/driver/as11fw.bin`（16386 B: 2 バイト header
-  `21 51` = idx `0x5121` + body `0x4000`）— リポジトリ同梱の
-  `firmware/as11fw.bin` はこれと同一ファイル。`make install` で
-  `/lib/firmware/hdus/as11fw.bin` となり、カーネル側
-  `request_firmware("hdus/as11fw.bin")` が使います。
-- `~/projects/hdus-linux/HDUS_Driver_Windows/SKNET_AS11Loader.sys`
-  （20992 B、offset `0xa88` に header `21 51`、fw `0xa90`）
-
-注意: `~/projects/hdus-linux/firmware/SKNET_AS11Loader.sys`
-（57472 B）は新しい PE ドライバで `0xa88` header を持たず、
-as11loader 形式では使えません（`--dry-run` で拒否されます）。
-
-手動で転送する場合（plugdev グループ権限で sudo 不要な場合あり）:
+ファームウェアを転送すると `3275:6051` として再列挙され、ドライバが使えます。
 
 ```sh
-./hdus_as11loader --dry-run firmware/as11fw.bin   # まず確認
-sudo ./hdus_as11loader firmware/as11fw.bin
-lsusb | grep -E '1738:5211|3275:6051'
+./hdus_as11loader --dry-run   # 解析のみ（USB には触らない）
+sudo ./hdus_as11loader        # usbfs 経由で転送
+lsusb | grep 3275             # 3275:6051 になっていれば成功
 ```
 
-`make install` すると `./firmware/` の中身が
-`/lib/firmware/hdus/` にコピーされます。
+引数を省略すると `./firmware/` と `./` を順に見ます。`SKNET_AS11Loader.sys`
+（`0xa88` の header、`0xa90` から本体）を直接渡すこともできます。
+
+転送は電源投入ごとに 1 回で、抜くまで `3275:6051` のままです。
 
 ## インストールとロード
 

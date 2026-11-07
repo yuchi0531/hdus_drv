@@ -48,7 +48,7 @@
  * Default firmware search (when no argument is given):
  *   ./SKNET_AS11Loader.sys
  *   ./firmware/SKNET_AS11Loader.sys
- *   ~/projects/hdus-linux/firmware/SKNET_AS11Loader.sys
+ *   ./firmware/as11fw.bin (shipped), ./SKNET_AS11Loader.sys
  *   ./as11fw.bin
  *   ./firmware/as11fw.bin
  *
@@ -273,11 +273,10 @@ static void print_firmware_info(const struct firmware *fw, int dry_run)
 static int resolve_firmware(const char *explicit, struct firmware *fw)
 {
 	static const char *const rel[] = {
-		"./SKNET_AS11Loader.sys",
+		"./firmware/as11fw.bin",	/* shipped with this repo */
 		"./firmware/SKNET_AS11Loader.sys",
-		"~/projects/hdus-linux/firmware/SKNET_AS11Loader.sys",
 		"./as11fw.bin",
-		"./firmware/as11fw.bin",
+		"./SKNET_AS11Loader.sys",
 	};
 	size_t i;
 	int tried = 0;
@@ -308,10 +307,9 @@ static int resolve_firmware(const char *explicit, struct firmware *fw)
 	if (tried == 0)
 		fprintf(stderr,
 			"hdus_as11loader: no default firmware found "
-			"(looked for ./SKNET_AS11Loader.sys, "
-			"./firmware/SKNET_AS11Loader.sys, "
-			"~/projects/hdus-linux/firmware/SKNET_AS11Loader.sys, "
-			"./as11fw.bin, ./firmware/as11fw.bin)\n");
+			"(looked for ./firmware/as11fw.bin, "
+			"./firmware/SKNET_AS11Loader.sys, ./as11fw.bin, "
+			"./SKNET_AS11Loader.sys)\n");
 	else
 		fprintf(stderr,
 			"hdus_as11loader: no valid firmware found in "
@@ -498,11 +496,9 @@ static void print_usage(const char *argv0)
 	       "  firmware  SKNET_AS11Loader.sys, raw as11fw.bin "
 	       "(2B header + 0x4000 body),\n"
 	       "            or a raw 0x4000-byte binary (idx=0x4d66)\n"
-	       "  default   ./SKNET_AS11Loader.sys, "
+	       "  default   ./firmware/as11fw.bin, "
 	       "./firmware/SKNET_AS11Loader.sys,\n"
-	       "            ~/projects/hdus-linux/firmware/"
-	       "SKNET_AS11Loader.sys,\n"
-	       "            ./as11fw.bin, ./firmware/as11fw.bin\n",
+	       "            ./as11fw.bin, ./SKNET_AS11Loader.sys\n",
 	       argv0);
 }
 

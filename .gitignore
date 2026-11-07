@@ -27,8 +27,6 @@ tools/asie_table_probe
 tools/asie_order_probe
 third_party/arib25_patched/test/build/
 .slim/
-firmware/*.bin
 firmware/*.sys
-firmware/as11fw.bin
 *.png
 *.ts
