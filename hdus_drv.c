@@ -436,31 +436,11 @@ static int hdus_hw_init(struct hdus_dev *dev)
 
 	hdus_power_gpio_seq(dev);
 	hdus_asie_on(dev);
-	{
-		u8 b[2] = { 0, 0 };
-
-		(void)hdus_send_ctl(dev, 0x02,
-				    (u16)((0x04 << 8) | dev->card_slave),
-				    0x0000, 0x0002, b);
-		dev_info(&dev->udev->dev,
-			 "card status after power/asie_on: ack=%d R=0x%02x\n",
-			 b[0], b[1]);
-	}
+	/* The tuner table lives on I2C slave 0x20 (demodulator) while the
+	 * card interface sits on 0x4a (ASIE5606), so both stay usable after
+	 * initialisation and no card-status probe is needed here. */
 	hdus_tuner_init_table(dev);
 	dev->tuner_table_valid = true;
-	/* The tuner table lives on I2C slave 0x20 (demodulator) while the
-	 * card interface sits on 0x4a (ASIE5606), so both must stay usable
-	 * after initialisation. Log the card status register to prove it. */
-	{
-		u8 b[2] = { 0, 0 };
-
-		(void)hdus_send_ctl(dev, 0x02,
-				    (u16)((0x04 << 8) | dev->card_slave),
-				    0x0000, 0x0002, b);
-		dev_info(&dev->udev->dev,
-			 "card status after tuner init: ack=%d R(0x04)=0x%02x\n",
-			 b[0], b[1]);
-	}
 
 	/* saddr detect (fatal on failure) */
 	memset(data, 0, sizeof(data));
@@ -1478,15 +1458,17 @@ static const struct file_operations hdus_fops = {
 /* USB driver core                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Only interface 0 carries the bulk-IN stream endpoint; interface 1 has no
+ * 0x81 and would otherwise fail to probe (and log an error) on every load. */
 static const struct usb_device_id hdus_usb_table[] = {
-	{ USB_DEVICE(0x3275, 0x6051) }, /* HDUS */
-	{ USB_DEVICE(0x3275, 0x6052) },
-	{ USB_DEVICE(0x3275, 0x6081) }, /* FS100U */
-	{ USB_DEVICE(0x3275, 0x6091) },
-	{ USB_DEVICE(0x3275, 0x6111) }, /* HDP2 */
-	{ USB_DEVICE(0x3275, 0x7010) }, /* HDP */
-	{ USB_DEVICE(0x3765, 0x6001) }, /* HDU */
-	{ USB_DEVICE(0x1738, 0x5211) }, /* pre-firmware (firmware upload) */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x6051, 0) }, /* HDUS */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x6052, 0) },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x6081, 0) }, /* FS100U */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x6091, 0) },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x6111, 0) }, /* HDP2 */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3275, 0x7010, 0) }, /* HDP */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x3765, 0x6001, 0) }, /* HDU */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x1738, 0x5211, 0) }, /* pre-firmware */
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, hdus_usb_table);

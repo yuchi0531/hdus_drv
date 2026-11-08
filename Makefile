@@ -30,16 +30,20 @@ TEST_BIN   := tools/hdus_test
 
 # B25 / PC/SC tools (libaribb25). ARIB25_DIR points at a recfriio
 # checkout's arib25/ (override: make ARIB25_DIR=/path/to/arib25 b25).
-ARIB25_DIR ?= $(HOME)/projects/recfriio/arib25
+# Resolved once here; under `sudo make install` $HOME points at root's home,
+# so the sources are looked up with wildcard and fall back to the prebuilt
+# binaries when they are not reachable.
+ARIB25_DIR ?= $(firstword $(wildcard $(HOME)/projects/recfriio/arib25 \
+	$(SUDO_HOME)/projects/recfriio/arib25) $(HOME)/projects/recfriio/arib25)
 # ECM-caching fork of libaribb25 (third_party/arib25_patched); used by
 # tools/hdus_b25_ecm, which removes redundant card round-trips.
 ARIB25_PATCHED_DIR ?= third_party/arib25_patched
-ARIB25_PATCHED_OBJS := $(ARIB25_PATCHED_DIR)/arib_std_b25.c \
-                       $(ARIB25_PATCHED_DIR)/b_cas_card.c \
-                       $(ARIB25_PATCHED_DIR)/multi2.c \
-                       $(ARIB25_PATCHED_DIR)/ts_section_parser.c
-ARIB25_OBJS := $(ARIB25_DIR)/arib_std_b25.c $(ARIB25_DIR)/b_cas_card.c \
-               $(ARIB25_DIR)/multi2.c $(ARIB25_DIR)/ts_section_parser.c
+ARIB25_OBJS := $(wildcard $(ARIB25_DIR)/arib_std_b25.c \
+               $(ARIB25_DIR)/b_cas_card.c $(ARIB25_DIR)/multi2.c \
+               $(ARIB25_DIR)/ts_section_parser.c)
+ARIB25_PATCHED_OBJS := $(wildcard $(ARIB25_PATCHED_DIR)/arib_std_b25.c \
+               $(ARIB25_PATCHED_DIR)/b_cas_card.c $(ARIB25_PATCHED_DIR)/multi2.c \
+               $(ARIB25_PATCHED_DIR)/ts_section_parser.c)
 # NOTE: td.c is intentionally omitted - it is the upstream standalone
 # test program with its own main().
 PCSC_CFLAGS := $(shell pkg-config --cflags libpcsclite 2>/dev/null)
