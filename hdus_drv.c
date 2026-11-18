@@ -240,26 +240,28 @@ static void hdus_power_gpio_seq(struct hdus_dev *dev)
 	(void)hdus_send_ctl(dev, 0x08, 0xfb07, 0x0000, 0x0001, NULL);
 	(void)hdus_send_ctl(dev, 0x10, 0x0200, 0x0000, 0x0001, NULL);
 
-	/* Power off. Delays are halved vs. the vendor sequence: this runs on
-	 * every tuner<->card switch, so latency is paid per APDU. */
-	msleep(20);
+	/* Power off. Timings are the vendor's (Hdus::UsbProcBegin): 50/100/100
+	 * ms. They were halved while the tuner<->card switch needed to be fast,
+	 * which left the RF section in an indeterminate state after repeated
+	 * cycles (reception then collapses until the device is unplugged). */
+	msleep(50);
 	(void)hdus_send_ctl(dev, 0x08, 0x0100, 0x0000, 0x0001, NULL);
-	msleep(40);
+	msleep(100);
 	(void)hdus_send_ctl(dev, 0x08, 0xdd0c, 0x0000, 0x0001, NULL);
-	msleep(40);
+	msleep(100);
 
 	(void)hdus_send_ctl(dev, 0x17, 0x0002, 0x0000, 0x0003, NULL);
 
 	/* Tuner on */
 	(void)hdus_send_ctl(dev, 0x08, 0xd500, 0x0000, 0x0001, NULL);
-	msleep(20);
+	msleep(50);
 	(void)hdus_send_ctl(dev, 0x08, 0x0800, 0x0000, 0x0001, NULL);
 	(void)hdus_send_ctl(dev, 0x08, 0x4040, 0x0000, 0x0001, NULL);
 	usleep_range(5000, 6000);
 	(void)hdus_send_ctl(dev, 0x08, 0x8080, 0x0000, 0x0001, NULL);
-	msleep(20);
+	msleep(50);
 	(void)hdus_send_ctl(dev, 0x08, 0x0404, 0x0000, 0x0001, NULL);
-	msleep(20);
+	msleep(50);
 }
 
 /* ASIE5606 on (the 0x10 bit in the gpio word is the card power bit). */
@@ -283,7 +285,6 @@ static void __maybe_unused hdus_card_power_cycle(struct hdus_dev *dev)
 	dev_info(&dev->udev->dev, "card: power cycle (card mode)\n");
 	hdus_power_gpio_seq(dev);
 	hdus_asie_on(dev);
-	/* Power cycle wipes the tuner register file. */
 	dev->tuner_table_valid = false;
 }
 
@@ -434,13 +435,14 @@ static int hdus_hw_init(struct hdus_dev *dev)
 	dev->r5 = 0x91;
 	dev->saddr = 0x5a;
 
+	/* Order matters and follows Hdus::UsbProcBegin exactly: power
+	 * GPIOs, then the tuner table on slave 0x20, and only then the
+	 * ASIE power-on strobe. The ASIE reset pulse must come last or the
+	 * tuner registers latched by the table are lost. */
 	hdus_power_gpio_seq(dev);
-	hdus_asie_on(dev);
-	/* The tuner table lives on I2C slave 0x20 (demodulator) while the
-	 * card interface sits on 0x4a (ASIE5606), so both stay usable after
-	 * initialisation and no card-status probe is needed here. */
 	hdus_tuner_init_table(dev);
 	dev->tuner_table_valid = true;
+	hdus_asie_on(dev);
 
 	/* saddr detect (fatal on failure) */
 	memset(data, 0, sizeof(data));
